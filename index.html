@@ -3,17 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Unit 20 フラッシュカード</title>
+<title>ユメタン1 フラッシュカード</title>
 
 <!-- PWA -->
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#1a1a2e">
-<meta name="description" content="Unit 20 英語語句フラッシュカード">
+<meta name="description" content="ユメタン1 英語語句フラッシュカード">
 
 <!-- iOS Safari ホーム画面対応 -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Unit20 単語">
+<meta name="apple-mobile-web-app-title" content="ユメタン1">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 
 <!-- Service Worker 登録 -->
@@ -370,6 +370,25 @@
   .tab + .tab { border-left: 2px solid var(--ink); }
   .tab.active { background: var(--ink); color: white; }
 
+  /* Range selector */
+  #rangeSelect {
+    width: 100%;
+    padding: 9px 14px;
+    border: 2px solid var(--ink);
+    border-radius: 8px;
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-family: inherit;
+    background: var(--card-bg);
+    color: var(--ink);
+    box-shadow: 3px 3px 0 var(--ink);
+    outline: none;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    text-align: center;
+  }
+
   /* Leaderboard */
   .lb-title {
     width: 100%;
@@ -467,6 +486,18 @@
     <button class="dir-btn" id="dirJP" onclick="setDirection('jp2en')">🇯🇵 日本語 → 英語</button>
   </div>
 
+  <!-- Batch size toggle -->
+  <div class="tabs" style="margin-bottom: 10px;">
+    <button class="tab active" id="batchAll" onclick="setBatchSize(0)">全範囲</button>
+    <button class="tab" id="batch50" onclick="setBatchSize(50)">50語ずつ</button>
+    <button class="tab" id="batch100" onclick="setBatchSize(100)">100語ずつ</button>
+  </div>
+
+  <!-- Batch range selector (shown only when 50/100 is chosen) -->
+  <div id="rangeWrap" style="display:none; width:100%; margin-bottom:20px;">
+    <select id="rangeSelect" onchange="setBatchIndex(this.value)"></select>
+  </div>
+
   <div class="tabs">
     <button class="tab active" id="tabAll" onclick="setMode('all')">すべて (${CARDS.length}語)</button>
     <button class="tab" id="tabUnseen" onclick="setMode('unseen')">未学習のみ</button>
@@ -537,6 +568,8 @@ let idx = 0;
 let isFlipped = false;
 let mode = 'all';
 let direction = 'en2jp'; // 'en2jp' or 'jp2en'
+let batchSize = 0;   // 0 = 全範囲, 50, or 100
+let batchIndex = 0;  // 現在の範囲 (0始まり)
 
 // --- LocalStorage leaderboard (shared via same browser/device is the simplest model;
 //     for a true shared board we use the artifact storage API if available,
@@ -616,7 +649,39 @@ document.getElementById('tabAll').textContent = `すべて (${CARDS.length}語)`
   const app = document.getElementById('app');
   app.style.display = 'flex';
   document.getElementById('userNameDisplay').textContent = '👤 ' + userName;
+
+  // 前回の学習位置を復元
+  let pos = null;
+  try { pos = JSON.parse(localStorage.getItem('unit20_pos_' + n) || 'null'); } catch {}
+  if (pos) {
+    cardType  = (pos.cardType === 'phrase') ? 'phrase' : 'word';
+    direction = (pos.direction === 'jp2en') ? 'jp2en' : 'en2jp';
+    mode      = (pos.mode === 'unseen') ? 'unseen' : 'all';
+    batchSize = (pos.batchSize === 50 || pos.batchSize === 100) ? pos.batchSize : 0;
+    batchIndex = Number.isInteger(pos.batchIndex) ? pos.batchIndex : 0;
+  }
+  CARDS = (cardType === 'word') ? WORDS_DATA : PHRASES_DATA;
+
+  // ボタン類の選択状態を復元した状態に合わせる
+  document.getElementById('typeWord').classList.toggle('active', cardType === 'word');
+  document.getElementById('typePhrase').classList.toggle('active', cardType === 'phrase');
+  document.getElementById('dirEN').classList.toggle('active', direction === 'en2jp');
+  document.getElementById('dirJP').classList.toggle('active', direction === 'jp2en');
+  document.getElementById('tabAll').classList.toggle('active', mode === 'all');
+  document.getElementById('tabUnseen').classList.toggle('active', mode === 'unseen');
+  document.getElementById('batchAll').classList.toggle('active', batchSize === 0);
+  document.getElementById('batch50').classList.toggle('active', batchSize === 50);
+  document.getElementById('batch100').classList.toggle('active', batchSize === 100);
+  buildRangeOptions();
+
   buildDeck();
+
+  // 前回開いていたカードの位置まで戻す
+  if (pos && pos.word) {
+    const j = deck.findIndex(c => c.word === pos.word);
+    if (j >= 0) { idx = j; render(); }
+  }
+
   updateLB();
   renderLB(loadLB());
 }
@@ -627,20 +692,88 @@ function setType(t) {
   document.getElementById('typeWord').classList.toggle('active', t === 'word');
   document.getElementById('typePhrase').classList.toggle('active', t === 'phrase');
   CARDS = (t === 'word') ? WORDS_DATA : PHRASES_DATA;
-  
-  // Update UI text
-  document.getElementById('tabAll').textContent = `すべて (${CARDS.length}語)`;
-  
-  // Build new deck
+
+  // 単語⇔フレーズで総数が変わるので範囲を作り直す
+  batchIndex = 0;
+  buildRangeOptions();
+
+  // Build new deck (updateTabCounts はこの中で呼ばれる)
   buildDeck();
+  savePos();
+}
+
+// 現在の範囲（50/100語ずつ）に絞ったカード群を返す。全範囲なら全体。
+function scopedCards() {
+  if (!batchSize) return CARDS;
+  const start = batchIndex * batchSize;
+  return CARDS.slice(start, start + batchSize);
+}
+
+// 範囲ドロップダウンの選択肢を作り直す
+function buildRangeOptions() {
+  const wrap = document.getElementById('rangeWrap');
+  const sel = document.getElementById('rangeSelect');
+  if (!batchSize) { wrap.style.display = 'none'; sel.innerHTML = ''; return; }
+  const total = CARDS.length;
+  const n = Math.ceil(total / batchSize);
+  if (batchIndex >= n) batchIndex = 0;
+  let html = '';
+  for (let i = 0; i < n; i++) {
+    const s = i * batchSize + 1;
+    const e = Math.min((i + 1) * batchSize, total);
+    html += '<option value="' + i + '">' + s + '〜' + e + '語</option>';
+  }
+  sel.innerHTML = html;
+  sel.value = String(batchIndex);
+  wrap.style.display = '';
+}
+
+// タブの語数表示を現在の範囲に合わせて更新
+function updateTabCounts() {
+  const base = scopedCards();
+  const unseen = base.filter(c => !learned.includes(c.word)).length;
+  document.getElementById('tabAll').textContent = 'すべて (' + base.length + '語)';
+  document.getElementById('tabUnseen').textContent = '未学習のみ (' + unseen + '語)';
+}
+
+// 現在の学習位置（種類・方向・モード・範囲・カード）をユーザーごとに保存
+function savePos() {
+  if (!userName) return;
+  try {
+    const cur = deck[idx];
+    localStorage.setItem('unit20_pos_' + userName, JSON.stringify({
+      cardType, direction, mode, batchSize, batchIndex,
+      word: cur ? cur.word : null
+    }));
+  } catch {}
+}
+
+function setBatchSize(size) {
+  batchSize = size;
+  batchIndex = 0;
+  document.getElementById('batchAll').classList.toggle('active', size === 0);
+  document.getElementById('batch50').classList.toggle('active', size === 50);
+  document.getElementById('batch100').classList.toggle('active', size === 100);
+  buildRangeOptions();
+  buildDeck();
+  savePos();
+}
+
+function setBatchIndex(i) {
+  batchIndex = parseInt(i, 10) || 0;
+  buildDeck();
+  savePos();
 }
 
 function buildDeck() {
+  const base = scopedCards();
   deck = mode === 'unseen'
-    ? CARDS.filter(c => !learned.includes(c.word))
-    : [...CARDS];
+    ? base.filter(c => !learned.includes(c.word))
+    : [...base];
+  if (!deck.length) deck = [...base];
   if (!deck.length) deck = [...CARDS];
   idx = 0;
+  updateTabCounts();
   render();
 }
 
@@ -653,7 +786,7 @@ function render() {
   document.getElementById('progFill').style.width = ((idx+1)/deck.length*100) + '%';
   document.getElementById('learnedStar').style.display = learned.includes(c.word) ? '' : 'none';
   document.getElementById('learnedCount').textContent = '⭐ ' + learned.length + '/' + CARDS.length + '語';
-  document.getElementById('tabUnseen').textContent = '未学習のみ (' + (CARDS.length - learned.length) + '語)';
+  updateTabCounts();
 
   const sfBtn = document.getElementById('speakBtnFront');
   const sbBtn = document.getElementById('speakBtnBack');
@@ -700,15 +833,15 @@ function flip() {
   if (isFlipped && direction === 'jp2en') setTimeout(speak, 300);
 }
 
-function next() { idx = (idx+1) % deck.length; render(); }
-function prev() { idx = (idx-1+deck.length) % deck.length; render(); }
+function next() { idx = (idx+1) % deck.length; render(); savePos(); }
+function prev() { idx = (idx-1+deck.length) % deck.length; render(); savePos(); }
 
 function doShuffle() {
   for (let i=deck.length-1;i>0;i--) {
     const j=Math.floor(Math.random()*(i+1));
     [deck[i],deck[j]]=[deck[j],deck[i]];
   }
-  idx=0; render();
+  idx=0; render(); savePos();
 }
 
 function markLearned() {
@@ -720,7 +853,7 @@ function markLearned() {
   }
   document.getElementById('learnedStar').style.display = '';
   document.getElementById('learnedCount').textContent = '⭐ ' + learned.length + '/' + CARDS.length + '語';
-  document.getElementById('tabUnseen').textContent = '未学習のみ (' + (CARDS.length - learned.length) + '語)';
+  updateTabCounts();
   setTimeout(next, 280);
 }
 
@@ -730,6 +863,7 @@ function resetProgress() {
   localStorage.removeItem('unit20_learned_'+userName);
   updateLB();
   buildDeck();
+  savePos();
 }
 
 function setDirection(dir) {
@@ -738,6 +872,7 @@ function setDirection(dir) {
   document.getElementById('dirJP').classList.toggle('active', dir === 'jp2en');
   idx = 0;
   render();
+  savePos();
 }
 
 function setMode(m) {
@@ -745,6 +880,7 @@ function setMode(m) {
   document.getElementById('tabAll').classList.toggle('active', m==='all');
   document.getElementById('tabUnseen').classList.toggle('active', m==='unseen');
   buildDeck();
+  savePos();
 }
 
 document.addEventListener('keydown', e => {
