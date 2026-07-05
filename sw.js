@@ -1,5 +1,5 @@
 // ユメタン1 フラッシュカード — Service Worker
-const CACHE_NAME = 'yumetan1-flashcard-v6';
+const CACHE_NAME = 'yumetan1-flashcard-v7';
 
 // キャッシュするリソース
 const PRECACHE_URLS = [
