@@ -1,5 +1,6 @@
 // ユメタン1 フラッシュカード — Service Worker
-const CACHE_NAME = 'yumetan1-flashcard-v7';
+const CACHE_PREFIX = 'yumetan1-flashcard-';
+const CACHE_NAME = CACHE_PREFIX + 'v8';
 
 // キャッシュするリソース
 const PRECACHE_URLS = [
@@ -20,12 +21,14 @@ self.addEventListener('install', event => {
   self.skipWaiting();
 });
 
-// --- アクティベート: 古いキャッシュを削除 ---
+// --- アクティベート: このアプリの古いキャッシュのみ削除（他アプリのキャッシュは残す） ---
 self.addEventListener('activate', event => {
   event.waitUntil(
     caches.keys().then(keys =>
       Promise.all(
-        keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))
+        keys
+          .filter(k => k.startsWith(CACHE_PREFIX) && k !== CACHE_NAME)
+          .map(k => caches.delete(k))
       )
     )
   );
@@ -57,9 +60,4 @@ self.addEventListener('fetch', event => {
       return fetch(event.request).then(res => {
         if (!res || res.status !== 200 || res.type === 'opaque') return res;
         const clone = res.clone();
-        caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
-        return res;
-      });
-    })
-  );
-});
+    
