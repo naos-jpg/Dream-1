@@ -37,6 +37,11 @@
     --muted: #8a8070;
     --card-bg: #fffdf7;
     --border: #d8d0c0;
+    --user-card-bg: #fffdf7;   /* 単語カード(表)の背景色 - ユーザーが変更可 */
+    --user-card-text: #1a1a2e; /* 単語カード(表)の文字色 - ユーザーが変更可 */
+    --user-back-bg: #1a1a2e;      /* 単語カード(裏)の背景色 - ユーザーが変更可 */
+    --user-back-word: #ffffff;    /* 単語カード(裏)の単語の文字色 */
+    --user-back-meaning: #e85d26; /* 単語カード(裏)の意味の文字色 */
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -208,11 +213,16 @@
     box-shadow: 4px 4px 0 var(--border);
   }
   .card-back {
-    background: var(--ink);
-    border-color: var(--ink);
+    background: var(--user-back-bg);
+    border-color: var(--user-back-bg);
     box-shadow: 4px 4px 0 rgba(0,0,0,0.3);
     transform: rotateY(180deg);
   }
+  /* 表カードはユーザーが色を変更できる */
+  .card-front { background: var(--user-card-bg); }
+  .card-front .word { color: var(--user-card-text); }
+  .card-front .face-label,
+  .card-front .pos { color: var(--user-card-text); opacity: 0.55; }
   .face-label {
     font-size: 0.68rem;
     font-weight: 900;
@@ -230,7 +240,7 @@
     letter-spacing: -0.01em;
     text-align: center;
   }
-  .card-back .word { color: white; font-size: 1.6rem; }
+  .card-back .word { color: var(--user-back-word); font-size: 1.6rem; }
   .pos {
     font-size: 0.78rem;
     color: var(--muted);
@@ -241,7 +251,7 @@
   .meaning {
     font-size: 1.6rem;
     font-weight: 700;
-    color: var(--accent);
+    color: var(--user-back-meaning);
     margin-top: 8px;
     text-align: center;
   }
@@ -389,6 +399,48 @@
     text-align: center;
   }
 
+  /* Card color settings */
+  .color-toggle {
+    border: 2px solid var(--border);
+    background: white;
+    border-radius: 8px;
+    padding: 2px 8px;
+    font-size: 0.9rem;
+    cursor: pointer;
+    line-height: 1.4;
+  }
+  #colorPanel {
+    width: 100%;
+    display: none;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 14px;
+    margin-bottom: 14px;
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    background: var(--card-bg);
+    box-shadow: 3px 3px 0 var(--border);
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+  #colorPanel label { display: flex; align-items: center; gap: 6px; }
+  #colorPanel .color-face-label {
+    background: var(--ink); color: var(--paper);
+    border-radius: 5px; padding: 2px 8px; font-size: 0.75rem;
+  }
+  #colorPanel input[type="color"] {
+    width: 34px; height: 30px; padding: 0;
+    border: 2px solid var(--border); border-radius: 6px;
+    background: none; cursor: pointer;
+  }
+  #colorPanel .color-reset {
+    margin-left: auto;
+    border: 2px solid var(--muted); background: white; color: var(--muted);
+    border-radius: 8px; padding: 5px 12px; font-size: 0.78rem; font-weight: 700;
+    font-family: inherit; cursor: pointer;
+  }
+
   /* Leaderboard */
   .lb-title {
     width: 100%;
@@ -471,7 +523,29 @@
 <div id="app">
   <div class="user-bar">
     <span class="user-name" id="userNameDisplay"></span>
-    <span class="learned-count" id="learnedCount"></span>
+    <span style="display:flex; align-items:center; gap:10px;">
+      <span class="learned-count" id="learnedCount"></span>
+      <button class="color-toggle" id="colorToggle" onclick="toggleColorPanel()" title="カードの色を変更">🎨</button>
+    </span>
+  </div>
+
+  <!-- Card color settings -->
+  <div id="colorPanel">
+    <span class="color-face-label">表</span>
+    <label>背景
+      <input type="color" id="cardBgPicker" oninput="setCardColor('bg', this.value)">
+    </label>
+    <label>文字
+      <input type="color" id="cardTextPicker" oninput="setCardColor('text', this.value)">
+    </label>
+    <span class="color-face-label">裏</span>
+    <label>背景
+      <input type="color" id="backBgPicker" oninput="setCardColor('backbg', this.value)">
+    </label>
+    <label>文字
+      <input type="color" id="backTextPicker" oninput="setCardColor('backtext', this.value)">
+    </label>
+    <button class="color-reset" onclick="resetCardColor()">標準に戻す</button>
   </div>
 
   <!-- Direction toggle -->
@@ -510,7 +584,7 @@
 
   <div class="section-pill" id="sectionPill">〈タイトル〉</div>
 
-  <div class="card-wrap" onclick="flip()">
+  <div class="card-wrap" id="cardWrap" onclick="flip()">
     <div class="card-inner" id="cardInner">
       <!-- Front face: changes based on direction -->
       <div class="card-face card-front">
@@ -705,6 +779,9 @@ document.getElementById('tabAll').textContent = `すべて (${CARDS.length}語)`
     if (j >= 0) { idx = j; render(); }
   }
 
+  // このユーザーのカード色設定を読み込む
+  loadCardColors();
+
   updateLB();
   renderLB(loadLB());
 }
@@ -768,7 +845,11 @@ function buildRangeOptions() {
   for (let i = 0; i < n; i++) {
     const s = i * batchSize + 1;
     const e = Math.min((i + 1) * batchSize, total);
-    html += '<option value="' + i + '">' + s + '〜' + e + '語</option>';
+    // この範囲が属するUnit名（複数Unitにまたがる場合は「Unit A〜B」）
+    const secStart = CARDS[s - 1] ? CARDS[s - 1].section : '';
+    const secEnd = CARDS[e - 1] ? CARDS[e - 1].section : '';
+    const unitLabel = (secStart === secEnd) ? secStart : (secStart + '〜' + secEnd.replace('Unit ', ''));
+    html += '<option value="' + i + '">' + unitLabel + '：' + s + '〜' + e + '語</option>';
   }
   sel.innerHTML = html;
   sel.value = String(batchIndex);
@@ -800,6 +881,55 @@ function savePos() {
   const cur = deck[idx];
   data[cardType] = { batchSize, batchIndex, word: cur ? cur.word : null };
   lsSet('unit20_pos_' + userName, JSON.stringify(data));
+}
+
+// --- 単語カードの色設定（表・裏、ユーザーごとに保存） ---
+const DEFAULT_CARD_BG = '#fffdf7';
+const DEFAULT_CARD_TEXT = '#1a1a2e';
+const DEFAULT_BACK_BG = '#1a1a2e';
+const DEFAULT_BACK_WORD = '#ffffff';
+const DEFAULT_BACK_MEANING = '#e85d26';
+function loadCardColors() {
+  const bg = lsGet('unit20_cardbg_' + userName, DEFAULT_CARD_BG);
+  const text = lsGet('unit20_cardtext_' + userName, DEFAULT_CARD_TEXT);
+  const backBg = lsGet('unit20_backbg_' + userName, DEFAULT_BACK_BG);
+  // 裏の文字色: 未設定なら標準（単語=白、意味=オレンジ）、設定済みなら両方その色
+  const backText = lsGet('unit20_backtext_' + userName, '');
+  const backWord = backText || DEFAULT_BACK_WORD;
+  const backMeaning = backText || DEFAULT_BACK_MEANING;
+
+  const rs = document.documentElement.style;
+  rs.setProperty('--user-card-bg', bg);
+  rs.setProperty('--user-card-text', text);
+  rs.setProperty('--user-back-bg', backBg);
+  rs.setProperty('--user-back-word', backWord);
+  rs.setProperty('--user-back-meaning', backMeaning);
+
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+  set('cardBgPicker', bg);
+  set('cardTextPicker', text);
+  set('backBgPicker', backBg);
+  set('backTextPicker', backText || DEFAULT_BACK_WORD);
+}
+function setCardColor(which, val) {
+  if (which === 'bg') lsSet('unit20_cardbg_' + userName, val);
+  else if (which === 'text') lsSet('unit20_cardtext_' + userName, val);
+  else if (which === 'backbg') lsSet('unit20_backbg_' + userName, val);
+  else if (which === 'backtext') lsSet('unit20_backtext_' + userName, val);
+  loadCardColors();
+}
+function resetCardColor() {
+  lsSet('unit20_cardbg_' + userName, DEFAULT_CARD_BG);
+  lsSet('unit20_cardtext_' + userName, DEFAULT_CARD_TEXT);
+  lsSet('unit20_backbg_' + userName, DEFAULT_BACK_BG);
+  lsSet('unit20_backtext_' + userName, '');
+  loadCardColors();
+}
+function toggleColorPanel() {
+  const p = document.getElementById('colorPanel');
+  if (!p) return;
+  const shown = p.style.display === 'flex';
+  p.style.display = shown ? 'none' : 'flex';
 }
 
 function setBatchSize(size) {
@@ -882,10 +1012,37 @@ function render() {
 }
 
 function flip() {
+  if (justSwiped) return; // スワイプ直後のタップ判定では裏返さない
   isFlipped = !isFlipped;
   document.getElementById('cardInner').classList.toggle('flipped', isFlipped);
   if (isFlipped && direction === 'jp2en') setTimeout(speak, 300);
 }
+
+// --- スワイプでカード送り（左=次へ / 右=前へ）。タップは従来どおり裏返し ---
+let touchStartX = 0, touchStartY = 0, justSwiped = false;
+(function setupSwipe() {
+  const cw = document.getElementById('cardWrap');
+  if (!cw || !cw.addEventListener) return;
+  cw.addEventListener('touchstart', (e) => {
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    touchStartX = t.clientX;
+    touchStartY = t.clientY;
+  }, { passive: true });
+  cw.addEventListener('touchend', (e) => {
+    const t = e.changedTouches && e.changedTouches[0];
+    if (!t) return;
+    const dx = t.clientX - touchStartX;
+    const dy = t.clientY - touchStartY;
+    // 横方向に50px以上、かつ縦より明確に大きい動きをスワイプと見なす
+    if (Math.abs(dx) >= 50 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      justSwiped = true;
+      if (dx < 0) next(); else prev();
+      // 直後に発生するclick(flip)を抑止し、少し後に解除
+      setTimeout(() => { justSwiped = false; }, 350);
+    }
+  }, { passive: true });
+})();
 
 function next() { idx = (idx+1) % deck.length; render(); savePos(); }
 function prev() { idx = (idx-1+deck.length) % deck.length; render(); savePos(); }
