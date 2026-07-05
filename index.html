@@ -1128,4 +1128,15 @@ window.onload = () => {
   const nameInput = document.getElementById('nameInput');
   if (savedUser) nameInput.value = savedUser;
   nameInput.focus();
-document.getElementById('tabAll').textContent = 
+document.getElementById('tabAll').textContent = `すべて (${CARDS.length}語)`;
+  // Show banner on iOS Safari if not already installed or dismissed
+  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const isStandalone = navigator.standalone === true;
+  const dismissed = localStorage.getItem('unit20_banner_dismissed');
+  if (isIOS && !isStandalone && !dismissed) {
+    document.getElementById('installBanner').style.display = 'flex';
+  }
+};
+</script>
+</body>
+</html>
