@@ -571,6 +571,24 @@ let direction = 'en2jp'; // 'en2jp' or 'jp2en'
 let batchSize = 0;   // 0 = 全範囲, 50, or 100
 let batchIndex = 0;  // 現在の範囲 (0始まり)
 
+// --- 安全なlocalStorageアクセス (iOSプライベートモード等での例外を吸収) ---
+function lsGet(key, fallback) {
+  try { const v = localStorage.getItem(key); return (v === null || v === undefined) ? fallback : v; }
+  catch { return fallback; }
+}
+function lsSet(key, value) {
+  try { localStorage.setItem(key, value); return true; } catch { return false; }
+}
+
+// --- iPhone/iPad等でデータが消えにくいよう永続ストレージを要求 ---
+(function requestPersistentStorage() {
+  try {
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persisted().then(p => { if (!p) navigator.storage.persist(); }).catch(() => {});
+    }
+  } catch {}
+})();
+
 // --- LocalStorage leaderboard (shared via same browser/device is the simplest model;
 //     for a true shared board we use the artifact storage API if available,
 //     otherwise fall back to localStorage) ---
@@ -644,21 +662,26 @@ function startApp() {
   if (!n) { document.getElementById('nameInput').focus();
 document.getElementById('tabAll').textContent = `すべて (${CARDS.length}語)`; return; }
   userName = n;
-  learned = JSON.parse(localStorage.getItem('unit20_learned_'+n) || '[]');
+  // 次回このデバイスで同じ名前がすぐ使えるよう保存（履歴のキーを一致させる）
+  lsSet('unit20_user', n);
+  try { learned = JSON.parse(lsGet('unit20_learned_'+n, '[]')) || []; } catch { learned = []; }
   document.getElementById('nameSetup').style.display = 'none';
   const app = document.getElementById('app');
   app.style.display = 'flex';
   document.getElementById('userNameDisplay').textContent = '👤 ' + userName;
 
-  // 前回の学習位置を復元
+  // 前回の学習位置を復元（方向・モードは共通、範囲/カードは種類ごと）
   let pos = null;
-  try { pos = JSON.parse(localStorage.getItem('unit20_pos_' + n) || 'null'); } catch {}
+  try { pos = JSON.parse(lsGet('unit20_pos_' + n, 'null')); } catch {}
+  let restoreWord = null;
   if (pos) {
-    cardType  = (pos.cardType === 'phrase') ? 'phrase' : 'word';
     direction = (pos.direction === 'jp2en') ? 'jp2en' : 'en2jp';
     mode      = (pos.mode === 'unseen') ? 'unseen' : 'all';
-    batchSize = (pos.batchSize === 50 || pos.batchSize === 100) ? pos.batchSize : 0;
-    batchIndex = Number.isInteger(pos.batchIndex) ? pos.batchIndex : 0;
+    cardType  = (pos.lastType === 'phrase' || pos.cardType === 'phrase') ? 'phrase' : 'word';
+    const sub = pos[cardType] || pos; // 種類別 → 無ければ旧形式にフォールバック
+    batchSize = (sub.batchSize === 50 || sub.batchSize === 100) ? sub.batchSize : 0;
+    batchIndex = Number.isInteger(sub.batchIndex) ? sub.batchIndex : 0;
+    restoreWord = sub.word || null;
   }
   CARDS = (cardType === 'word') ? WORDS_DATA : PHRASES_DATA;
 
@@ -677,8 +700,8 @@ document.getElementById('tabAll').textContent = `すべて (${CARDS.length}語)`
   buildDeck();
 
   // 前回開いていたカードの位置まで戻す
-  if (pos && pos.word) {
-    const j = deck.findIndex(c => c.word === pos.word);
+  if (restoreWord) {
+    const j = deck.findIndex(c => c.word === restoreWord);
     if (j >= 0) { idx = j; render(); }
   }
 
@@ -688,17 +711,41 @@ document.getElementById('tabAll').textContent = `すべて (${CARDS.length}語)`
 
 
 function setType(t) {
+  if (t === cardType) return;
+  // 切り替える前に、今の種類の位置を保存しておく
+  savePos();
+
   cardType = t;
   document.getElementById('typeWord').classList.toggle('active', t === 'word');
   document.getElementById('typePhrase').classList.toggle('active', t === 'phrase');
   CARDS = (t === 'word') ? WORDS_DATA : PHRASES_DATA;
 
-  // 単語⇔フレーズで総数が変わるので範囲を作り直す
-  batchIndex = 0;
+  // この種類で前回開いていた範囲・カードを復元する
+  let restoreWord = null;
+  const sub = readPos()[t];
+  if (sub) {
+    batchSize = (sub.batchSize === 50 || sub.batchSize === 100) ? sub.batchSize : 0;
+    batchIndex = Number.isInteger(sub.batchIndex) ? sub.batchIndex : 0;
+    restoreWord = sub.word || null;
+  } else {
+    // この種類は初めて → 現在の範囲サイズは保ちつつ先頭から
+    batchIndex = 0;
+  }
+
+  // 範囲ボタンの選択状態を合わせる
+  document.getElementById('batchAll').classList.toggle('active', batchSize === 0);
+  document.getElementById('batch50').classList.toggle('active', batchSize === 50);
+  document.getElementById('batch100').classList.toggle('active', batchSize === 100);
   buildRangeOptions();
 
   // Build new deck (updateTabCounts はこの中で呼ばれる)
   buildDeck();
+
+  // 前回開いていたカードまで戻す
+  if (restoreWord) {
+    const j = deck.findIndex(c => c.word === restoreWord);
+    if (j >= 0) { idx = j; render(); }
+  }
   savePos();
 }
 
@@ -736,16 +783,23 @@ function updateTabCounts() {
   document.getElementById('tabUnseen').textContent = '未学習のみ (' + unseen + '語)';
 }
 
-// 現在の学習位置（種類・方向・モード・範囲・カード）をユーザーごとに保存
+// 現在の学習位置を「単語」「フレーズ」別に保存する。
+// 方向・モードは共通、範囲とカード位置は種類ごとに個別に記憶するので、
+// 単語⇔フレーズを切り替えても、それぞれの続きから再開できる。
+function readPos() {
+  let data = {};
+  try { data = JSON.parse(lsGet('unit20_pos_' + userName, '{}')) || {}; } catch { data = {}; }
+  return data;
+}
 function savePos() {
   if (!userName) return;
-  try {
-    const cur = deck[idx];
-    localStorage.setItem('unit20_pos_' + userName, JSON.stringify({
-      cardType, direction, mode, batchSize, batchIndex,
-      word: cur ? cur.word : null
-    }));
-  } catch {}
+  const data = readPos();
+  data.lastType = cardType;
+  data.direction = direction;
+  data.mode = mode;
+  const cur = deck[idx];
+  data[cardType] = { batchSize, batchIndex, word: cur ? cur.word : null };
+  lsSet('unit20_pos_' + userName, JSON.stringify(data));
 }
 
 function setBatchSize(size) {
@@ -848,7 +902,7 @@ function markLearned() {
   const w = deck[idx].word;
   if (!learned.includes(w)) {
     learned.push(w);
-    localStorage.setItem('unit20_learned_'+userName, JSON.stringify(learned));
+    lsSet('unit20_learned_'+userName, JSON.stringify(learned));
     updateLB();
   }
   document.getElementById('learnedStar').style.display = '';
@@ -860,7 +914,7 @@ function markLearned() {
 function resetProgress() {
   if (!confirm('進捗をリセットしますか？')) return;
   learned = [];
-  localStorage.removeItem('unit20_learned_'+userName);
+  try { localStorage.removeItem('unit20_learned_'+userName); } catch {}
   updateLB();
   buildDeck();
   savePos();
@@ -898,7 +952,11 @@ function dismissBanner() {
 }
 
 window.onload = () => {
-  document.getElementById('nameInput').focus();
+  // 前回の名前を復元して入力欄に自動入力（同じ履歴をすぐ呼び出せる）
+  const savedUser = lsGet('unit20_user', '');
+  const nameInput = document.getElementById('nameInput');
+  if (savedUser) nameInput.value = savedUser;
+  nameInput.focus();
 document.getElementById('tabAll').textContent = `すべて (${CARDS.length}語)`;
   // Show banner on iOS Safari if not already installed or dismissed
   const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
