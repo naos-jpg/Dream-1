@@ -933,13 +933,27 @@ function toggleColorPanel() {
 }
 
 function setBatchSize(size) {
+  // いま開いているカードを覚えておき、バッチ変更後もその単語を表示し続ける
+  const curWord = deck[idx] ? deck[idx].word : null;
+
   batchSize = size;
-  batchIndex = 0;
+  // 現在の単語がどの範囲に入るかを計算して、その範囲を開く（先頭に戻さない）
+  if (size > 0 && curWord) {
+    const gp = CARDS.findIndex(c => c.word === curWord);
+    batchIndex = gp >= 0 ? Math.floor(gp / size) : 0;
+  } else {
+    batchIndex = 0;
+  }
   document.getElementById('batchAll').classList.toggle('active', size === 0);
   document.getElementById('batch50').classList.toggle('active', size === 50);
   document.getElementById('batch100').classList.toggle('active', size === 100);
   buildRangeOptions();
   buildDeck();
+  // 同じ単語までカード位置を戻す
+  if (curWord) {
+    const j = deck.findIndex(c => c.word === curWord);
+    if (j >= 0) { idx = j; render(); }
+  }
   savePos();
 }
 
@@ -1114,15 +1128,4 @@ window.onload = () => {
   const nameInput = document.getElementById('nameInput');
   if (savedUser) nameInput.value = savedUser;
   nameInput.focus();
-document.getElementById('tabAll').textContent = `すべて (${CARDS.length}語)`;
-  // Show banner on iOS Safari if not already installed or dismissed
-  const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
-  const isStandalone = navigator.standalone === true;
-  const dismissed = localStorage.getItem('unit20_banner_dismissed');
-  if (isIOS && !isStandalone && !dismissed) {
-    document.getElementById('installBanner').style.display = 'flex';
-  }
-};
-</script>
-</body>
-</html>
+document.getElementById('tabAll').textContent = 
