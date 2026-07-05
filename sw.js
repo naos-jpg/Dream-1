@@ -60,4 +60,9 @@ self.addEventListener('fetch', event => {
       return fetch(event.request).then(res => {
         if (!res || res.status !== 200 || res.type === 'opaque') return res;
         const clone = res.clone();
-    
+        caches.open(CACHE_NAME).then(c => c.put(event.request, clone));
+        return res;
+      });
+    })
+  );
+});
